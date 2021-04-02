@@ -3,10 +3,14 @@ import './App.css';
 import firebase from 'firebase/app';
 import 'firebase/firestore';
 import 'firebase/auth';
-import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
+import { BrowserRouter, Switch, Route} from "react-router-dom";
 import { useParams } from 'react-router'
 import { useCollectionData } from 'react-firebase-hooks/firestore';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import IconButton from '@material-ui/core/IconButton';
+import SendIcon from '@material-ui/icons/Send';
+import CameraAltIcon from '@material-ui/icons/CameraAlt';
+import AttachFileIcon from '@material-ui/icons/AttachFile';
 import "firebase/storage"
 
 firebase.initializeApp({
@@ -25,8 +29,11 @@ function GroupChat() {
   //ideally it should be working when the chat is loaded for the first time as well - it does work in the video
   //but i must have messed up somewhere.
   const dummy = useRef()
-  let { id } = useParams();
+  let { id, uname } = useParams();
 
+  useEffect(() => {
+    dummy.current?.scrollIntoView({behaviour:"auto"})
+  })
 
   const messagesRef = firestore.collection('groupMessages');
   const query = messagesRef.orderBy('createdAt').limit(500);
@@ -40,7 +47,8 @@ function GroupChat() {
     await messagesRef.add({
       text: formValue,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      sender: id
+      sender: id,
+      name: uname
     })
 
     setFormValue('');
@@ -48,14 +56,22 @@ function GroupChat() {
   }
 
   return (
-    <div className="Main" style={{height: "100vh"}}>
-      <main>
+    <div>
+      <main className="chatSection">
         {messages && messages.map(msg => <GroupChatMessage email={id} key={msg.id} message={msg} />)}
         <span ref={dummy}></span>
       </main>
-      <form onSubmit={sendMessage}>
+      <form className="inputSection" onSubmit={sendMessage}>
         <input value={formValue} onChange={(e) => setFormValue(e.target.value)} placeholder=" Message" />
-        <button type="submit" disabled={!formValue}>Send</button>
+        <IconButton 
+          color="primary" 
+          aria-label="send"
+          size="large"
+          type="submit" 
+          disabled={!formValue}
+        >
+          <SendIcon />
+        </IconButton>
       </form>
     </div>
   )
@@ -64,7 +80,7 @@ function GroupChat() {
 
 function GroupChatMessage(props) {
 
-  const { text, sender, createdAt, uid } = props.message;
+  const { text, sender, name, createdAt} = props.message;
 
   //this is conditional css.
   const messageClass = sender === props.email ? 'sent' : 'received';
@@ -72,7 +88,10 @@ function GroupChatMessage(props) {
   if (messageClass === "received")
     return (
       <div className={`message ${messageClass}`}>
-        <p>{text}, <i>sent by {sender}</i></p>
+        <div className="groupReceived">
+        <p>{text}</p>
+        <i>{name} - {new Date(createdAt.seconds * 1000).toLocaleString('default', {day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'})}</i>
+        </div>
       </div>
     )
   else
@@ -85,8 +104,15 @@ function GroupChatMessage(props) {
 
 function PrivateChat(props) {
   //purpose of dummy same as in group chat. please check there.
+  let f = null
   const dummy = useRef()
   const { id, pid } = useParams();
+
+  const [imgLoad, setImgLoad] = useState(0)
+
+  useEffect(() => {
+    dummy.current?.scrollIntoView({behaviour:"auto"})
+  }, [imgLoad])
 
   //storeRef is for Cloud Storage - for file upload.
   const storeRef = firebase.storage().ref();
@@ -103,7 +129,6 @@ function PrivateChat(props) {
   //messageType is to know if user is uploading file or sending text. 1 -> sending text, 0 -> sending file.
   const [messageType, setMessageType] = useState(1);
   const [formValue, setFormValue] = useState('');
-
 
   //this is only for text message, same as group chat
   //the tofrom is a database field to know if patient is the one who sent or care provider - just like in adalo database.
@@ -130,72 +155,112 @@ function PrivateChat(props) {
 
 
   //switch between text or file
-  function changetype() {
-    if (messageType === 1)
-      setMessageType(0)
-    else
-      setMessageType(1)
+  function changetype(e, value) {
+      setMessageType(value);
+      f = null;
+
   }
 
   //fileUpload function
-  const fileUpload = async (e) => {
-    let f = e.target.files[0];
-    let tofrom = 1
-    if (id === "admin@canswer.com")
-      tofrom = 0
+  const fileUpload = async (e, ftype) => {
+    if (f !== null) {
+      //f = e.target.files[0];
+      let tofrom = 1
+      if (id === "admin@canswer.com")
+        tofrom = 0
 
-    //furl is a variable to store the url of the file once it is uploaded
-    let furl = ""
-    let ref = storeRef.child(f.name);
+      //furl is a variable to store the url of the file once it is uploaded
+      let furl = ""
+      let ref = storeRef.child(f.name);
 
-    //this is file upload section
-    ref.put(f).then(async () => {
-      await storeRef.child(f.name).getDownloadURL(f.name).then((url) => {
-        furl = url;
+      //this is file upload section
+      ref.put(f).then(async () => {
+        await storeRef.child(f.name).getDownloadURL(f.name).then((url) => {
+          furl = url;
+        })
+
+        //this is to make an entry in firestore
+        //that stores the url in 'furl'
+        //it displays an <a> tag in chat
+        //the file field is set as 1 to indicate this message is file.
+        //check PrivateChatMessage for further details
+        await messagesRef.add({
+          text: "",
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          patient: pid,
+          toFrom: tofrom,
+          file: ftype,
+          filename: f.name,
+          url: furl
+        })
       })
 
-      //this is to make an entry in firestore
-      //that stores the url in 'furl'
-      //it displays an <a> tag in chat
-      //the file field is set as 1 to indicate this message is file.
-      //check PrivateChatMessage for further details
-      await messagesRef.add({
-        text: "",
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        patient: pid,
-        toFrom: tofrom,
-        file: 1,
-        filename: f.name,
-        url: furl
-      })
-    })
+      setMessageType(1);
+    }
+  }
+
+  const setFile = (e) => {
+    f = e.target.files[0];
+  }
+
+  const imgLoaded = (e) => {
+    setImgLoad(!imgLoad)
   }
 
   if (messageType === 1) {
     return (
-      <div className="Main">
-        <main>
-          {messages && messages.map(msg => <PrivateChatMessage email={id} key={msg.id} message={msg} />)}
+      <div>
+        <main className="chatSection">
+          {messages && messages.map(msg => <PrivateChatMessage email={id} key={msg.id} message={msg} loader={imgLoaded}/>)}
           <span ref={dummy}></span>
         </main>
-        <div className='form'>
+        <div className='inputSection'>
           <input value={formValue} onChange={(e) => setFormValue(e.target.value)} placeholder=" Message" />
-          <button className='form-button' onClick={changetype}>upload</button>
-          <button className='form-button' onClick={sendMessage} disabled={!formValue}>Send</button>
+          <IconButton 
+            color="primary" 
+            aria-label="send"
+            size="large"
+            onClick={(e) => changetype(e, 2)}
+          >
+            <CameraAltIcon />
+          </IconButton>
+          <IconButton 
+            color="primary" 
+            aria-label="send"
+            size="large"
+            onClick={(e) => changetype(e, 0)}
+          >
+            <AttachFileIcon />
+          </IconButton>
+          <IconButton 
+            color="primary" 
+            aria-label="send"
+            size="large"
+            onClick={sendMessage} 
+            disabled={!formValue}
+          >
+            <SendIcon />
+          </IconButton>
         </div>
       </div>
     )
   }
-  else {
+  else if(messageType === 0){
     return (
-      <div className="Main">
-        <main>
-          {messages && messages.map(msg => <PrivateChatMessage email={id} key={msg.id} message={msg} />)}
-          <span ref={dummy}></span>
-        </main>
-        <div className='form'>
-          <input type='file' onChange={(e) => fileUpload(e)}></input>
-          <button className='form-button' onClick={changetype}>text</button>
+        <div className='modal'>
+          <input type='file' onChange={(e) => setFile(e)}></input>
+          <button onClick={(e) => fileUpload(e, 1)} >Upload</button>
+          <button onClick={(e) => changetype(e, 1)}>Back</button>
+        </div>
+    )
+  }
+  else{
+    return (
+      <div>
+        <div className='modal'>
+          <input className='modalInput' accept="image/*" type="file" capture="environment" onChange={(e) => setFile(e)}></input>
+          <button className='modalButtons' onClick={(e) => fileUpload(e, 2)} >Upload</button>
+          <button className='modalButtons' onClick={(e) => changetype(e, 1)}>Back</button>
         </div>
       </div>
     )
@@ -203,7 +268,7 @@ function PrivateChat(props) {
 }
 
 function PrivateChatMessage(props) {
-  const { text, patient, toFrom, file, url, filename, id } = props.message;
+  const { text, patient, toFrom, file, url, filename} = props.message;
 
   let messageClass
 
@@ -223,10 +288,17 @@ function PrivateChatMessage(props) {
     )
   }
   //else, display an anchor tag
-  else {
+  else if(file === 1){
     return (
       <div className={`message ${messageClass}`}>
         <a href={url}>{filename}</a>
+      </div>
+    )
+  }
+  else if(file === 2){
+    return (
+      <div className={`message ${messageClass}`}>
+        <img src={url} onLoad={props.loader} alt={""} ></img>
       </div>
     )
   }
@@ -242,7 +314,7 @@ function App() {
       <section>
         <BrowserRouter>
           <Switch>
-            <Route path="/groupchat/:id" component={GroupChat} exact />
+            <Route path="/groupchat/:id/:uname" component={GroupChat} exact />
             <Route path="/privatechat/:id/:pid" component={PrivateChat} exact />
           </Switch>
         </BrowserRouter>
